@@ -26,6 +26,8 @@ class CampaignIn(BaseModel):
     batch_ratios: list[float]
     min_samples: int = 3
     min_health_ratio: float = 0.9
+    command_ttl_seconds: float = 3600.0
+    max_in_flight_per_batch: int = 1_000_000
 
 
 class ReportIn(BaseModel):
@@ -46,6 +48,11 @@ def create_app(store_path: str = "ota_state.json") -> FastAPI:
     service = RolloutService(store)
     app = FastAPI(title="OTA Fleet Rollout Service")
 
+    @app.on_event("startup")
+    def _start_sweeper() -> None:
+        # 无人值守的超时自动收尾；重启后以持久化的 expires_at 继续判定
+        service.start_auto_sweeper(interval_seconds=5.0)
+
     @app.post("/devices")
     def register_device(body: DeviceIn) -> dict:
         d = service.register_device(body.device_id, body.model, body.version)
@@ -62,6 +69,7 @@ def create_app(store_path: str = "ota_state.json") -> FastAPI:
             rejected = service.start_campaign(
                 body.campaign_id, body.version, body.batch_ratios,
                 body.min_samples, body.min_health_ratio,
+                body.command_ttl_seconds, body.max_in_flight_per_batch,
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
@@ -88,6 +96,35 @@ def create_app(store_path: str = "ota_state.json") -> FastAPI:
     def rollback(device_id: str, body: RollbackIn) -> dict:
         return {"rolled_back": service.rollback_device(device_id, body.reason)}
 
+    @app.get("/campaigns/{campaign_id}/devices/{device_id}/command")
+    def fetch_command(campaign_id: str, device_id: str) -> dict:
+        """设备主动拉取自己当前应执行的指令（反复拉取幂等，同一条指令）。"""
+        result = service.fetch_command(device_id, campaign_id)
+        payload: dict = {
+            "device_id": device_id,
+            "campaign_id": campaign_id,
+            "status": result.status.value,
+            "detail": result.detail,
+        }
+        if result.command is not None:
+            payload["command"] = {
+                "command_id": result.command.command_id,
+                "version": result.command.version,
+                "issued_at": result.command.issued_at,
+                "expires_at": result.command.expires_at,
+            }
+        else:
+            payload["command"] = None
+        return payload
+
+    @app.post("/campaigns/{campaign_id}/sweep")
+    def sweep_timeouts(campaign_id: str) -> dict:
+        """手动触发一次超时自动收尾（可重复触发，规则与后台收尾完全一致）。"""
+        if campaign_id not in store.campaigns:
+            raise HTTPException(status_code=404, detail="发布不存在")
+        rolled_back = service.sweep_timeouts(campaign_id)
+        return {"rolled_back": rolled_back, "count": len(rolled_back)}
+
     @app.get("/devices/{device_id}")
     def get_device(device_id: str) -> dict:
         d = store.devices.get(device_id)
@@ -98,6 +135,10 @@ def create_app(store_path: str = "ota_state.json") -> FastAPI:
             "state": d.state.value,
             "current_version": d.current_version,
             "batch_index": d.batch_index,
+            "last_good_version": d.last_good_version,
+            "command_id": d.command_id,
+            "command_version": d.command_version,
+            "command_expires_at": d.command_expires_at,
         }
 
     return app

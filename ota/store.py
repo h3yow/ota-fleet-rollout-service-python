@@ -33,6 +33,10 @@ class Store:
             "batch_index": d.batch_index,
             "last_report_seq": d.last_report_seq,
             "last_good_version": d.last_good_version,
+            "command_id": d.command_id,
+            "command_version": d.command_version,
+            "command_issued_at": d.command_issued_at,
+            "command_expires_at": d.command_expires_at,
         }
 
     def _device_from_dict(self, data: dict) -> Device:
@@ -44,6 +48,10 @@ class Store:
             batch_index=data["batch_index"],
             last_report_seq=data["last_report_seq"],
             last_good_version=data["last_good_version"],
+            command_id=data.get("command_id", ""),
+            command_version=data.get("command_version", ""),
+            command_issued_at=data.get("command_issued_at", 0.0),
+            command_expires_at=data.get("command_expires_at", 0.0),
         )
 
     def _campaign_to_dict(self, c: Campaign) -> dict:
@@ -58,6 +66,8 @@ class Store:
             "min_health_ratio": c.min_health_ratio,
             "current_batch": c.current_batch,
             "status": c.status,
+            "command_ttl_seconds": c.command_ttl_seconds,
+            "max_in_flight_per_batch": c.max_in_flight_per_batch,
         }
 
     def _campaign_from_dict(self, data: dict) -> Campaign:
@@ -72,6 +82,8 @@ class Store:
             min_health_ratio=data["min_health_ratio"],
             current_batch=data["current_batch"],
             status=data["status"],
+            command_ttl_seconds=data.get("command_ttl_seconds", 3600.0),
+            max_in_flight_per_batch=data.get("max_in_flight_per_batch", 1_000_000),
         )
 
     # ---------- 持久化 ----------
